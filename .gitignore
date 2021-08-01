@@ -87,3 +87,5 @@ bin
 .scannerwork
 .sonar
 *.tgz
+
+docker-vault-operator-init

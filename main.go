@@ -2,24 +2,37 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/secretsmanager"
+	//"google.golang.org/protobuf/types/known/fieldmaskpb"
+
+	//"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/genproto/protobuf/field_mask"
+
+	"log"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+
+	secretmanager "cloud.google.com/go/secretmanager/apiv1"
+	secretmanagerpb "google.golang.org/genproto/googleapis/cloud/secretmanager/v1"
+
 	"github.com/kelseyhightower/envconfig"
 )
 
 type Config struct {
-	AwsSecretName          string `split_words:"true" required:"true"`
-	VaultAddr              string `split_words:"true" required:"true"`
-	VaultRecoveryShares    int    `split_words:"true" default:"5"`
-	VaultRecoveryThreshold int    `split_words:"true" default:"3"`
+	GcpSecretName               string `envconfig:"GCP_SECRET_NAME" required:"true"`
+	ProjectID                   string `envconfig:"GCP_PROJECT_ID" required:"true"`
+	GoogleApplicationCredential string `envconfig:"GOOGLE_APPLICATION_CREDENTIAL" required:"true"`
+	VaultAddr                   string `envconfig:"VAULT_ADDR" required:"true"`
+	VaultRecoveryShares         int    `envconfig:"VAULT_RECOVERY_SHARES" default:"5"`
+	VaultRecoveryThreshold      int    `envconfig:"VAULT_RECOVERY_THRESHOLD" default:"3"`
 }
 
 func GetConfig() Config {
@@ -32,47 +45,164 @@ func GetConfig() Config {
 	return c
 }
 
-func main() {
-	c := GetConfig()
-	// we need to make sure that aws api is setup correctly before doing an init on vault,
-	// so we create/update the secret to make sure we have proper access..
-	s := session.Must(session.NewSession())
-	sm := secretsmanager.New(s)
-	vs, err := sm.DescribeSecret(&secretsmanager.DescribeSecretInput{
-		SecretId: aws.String(c.AwsSecretName),
-	})
+type Client struct {
+	client    *secretmanager.Client
+	projectID string
+}
 
+func NewClient(cfg *Config) (*Client, error) {
+	// Create the client.
+	ctx := context.Background()
+	client, err := secretmanager.NewClient(ctx)
 	if err != nil {
-		if _, ok := err.(*secretsmanager.ResourceNotFoundException); ok {
-			_, err := sm.CreateSecret(&secretsmanager.CreateSecretInput{
-				Description:  aws.String("Initial Vault Root Token and Recovery Keys"),
-				Name:         aws.String(c.AwsSecretName),
-				SecretString: aws.String("created"),
-			})
-			if err != nil {
-				log.Panic(err)
-			}
-		} else {
-			log.Panic(err)
-		}
-	} else {
-		if vs.DeletedDate != nil {
-			_, err = sm.RestoreSecret(&secretsmanager.RestoreSecretInput{
-				SecretId: aws.String(c.AwsSecretName),
-			})
-			if err != nil {
-				log.Panic(err)
-			}
+		log.Panic("failed to setup client: %v", err.Error())
+		return nil, err
+	}
+
+	return &Client{
+		client:    client,
+		projectID: cfg.ProjectID,
+	}, nil
+}
+
+func (c *Client) secretPath(name string) string {
+	return fmt.Sprintf("projects/%s/secrets/%s/versions/latest", c.projectID, name)
+}
+
+func (c *Client) getSecret(name, key string) (string, error) {
+	// Call the API.
+	secret, err := c.client.AccessSecretVersion(context.TODO(), &secretmanagerpb.AccessSecretVersionRequest{Name: c.secretPath(name)})
+	if err != nil {
+		return "", err
+	}
+
+	jsonMap := make(map[string]interface{})
+	err = json.Unmarshal(secret.Payload.Data, &jsonMap)
+	if err != nil {
+		panic(err)
+	}
+
+	if val, ok := jsonMap[key]; ok {
+		if rs, ok := val.(string); ok {
+			return rs, nil
 		}
 	}
 
-	_, err = sm.UpdateSecret(&secretsmanager.UpdateSecretInput{
-		SecretId:     aws.String(c.AwsSecretName),
-		SecretString: aws.String("updated"),
-	})
+	return "", fmt.Errorf("unknown secret name:%s and key:%s", name, key)
+}
 
+// ContextWithSignal returns a context that cancels itself when given signals are received.
+func contextWithSignal(parent context.Context, signals ...os.Signal) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, signals...)
+	go func() {
+		select {
+		case <-ch:
+			cancel()
+		case <-ctx.Done():
+			cancel()
+		}
+		signal.Stop(ch)
+		close(ch)
+	}()
+	return ctx, cancel
+}
+
+func main() {
+	var ctx, cancel = contextWithSignal(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	c := GetConfig()
+
+	cli, err := NewClient(&c)
 	if err != nil {
 		log.Panic(err)
+	}
+	defer cli.client.Close()
+
+	secret, err := cli.client.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{Name: cli.secretPath(c.GcpSecretName)})
+	if err != nil {
+		log.Println("failed to access secret version")
+		if strings.Contains(strings.ToLower(err.Error()), "notfound") {
+			log.Println("secret not found")
+			// Create the request to create the secret.
+			createSecretReq := &secretmanagerpb.CreateSecretRequest{
+				Parent:   fmt.Sprintf("projects/%s", c.ProjectID),
+				SecretId: c.GcpSecretName,
+				Secret: &secretmanagerpb.Secret{
+					Replication: &secretmanagerpb.Replication{
+						Replication: &secretmanagerpb.Replication_Automatic_{
+							Automatic: &secretmanagerpb.Replication_Automatic{},
+						},
+					},
+				},
+			}
+
+			secret, err := cli.client.CreateSecret(ctx, createSecretReq)
+			if err != nil {
+				log.Fatalf("failed to create secret: %v", err)
+			}
+			// Declare the payload to store.
+			payload := []byte("comming soon")
+			log.Println("secret created")
+
+			// Build the request.
+			addSecretVersionReq := &secretmanagerpb.AddSecretVersionRequest{
+				Parent: secret.Name,
+				Payload: &secretmanagerpb.SecretPayload{
+					Data: payload,
+				},
+			}
+
+			// Call the API.
+			_, err = cli.client.AddSecretVersion(ctx, addSecretVersionReq)
+			if err != nil {
+				log.Fatalf("failed to add secret version: %v", err)
+			}
+
+			log.Println("secret versioned")
+		} else {
+			log.Panic(err.Error())
+		}
+	}
+
+	if secret == nil {
+		log.Println("nil secret first time creation")
+	} else {
+		log.Println(secret.Name)
+	}
+
+	updateReq := &secretmanagerpb.UpdateSecretRequest{
+		Secret: &secretmanagerpb.Secret{
+			//Name: c.GcpSecretName,
+			Name: fmt.Sprintf("projects/%s/secrets/%s", c.ProjectID, c.GcpSecretName),
+			Labels: map[string]string{
+				"secretmanager": "rocks",
+			},
+		},
+		UpdateMask: &field_mask.FieldMask{
+			Paths: []string{"labels"},
+		},
+	}
+
+	// Call the API.
+	_, err = cli.client.UpdateSecret(ctx, updateReq)
+	if err != nil {
+		log.Fatalf("failed to update secret: %v", err)
+	}
+
+	// Build the request.
+	addSecretVersionReq := &secretmanagerpb.AddSecretVersionRequest{
+		Parent: fmt.Sprintf("projects/%s/secrets/%s", c.ProjectID, c.GcpSecretName),
+		Payload: &secretmanagerpb.SecretPayload{
+			Data: []byte("updated"),
+		},
+	}
+
+	_, err = cli.client.AddSecretVersion(ctx, addSecretVersionReq)
+	if err != nil {
+		log.Fatalf("failed to add secret version: %v", err)
 	}
 
 	client := &http.Client{}
@@ -95,6 +225,11 @@ func main() {
 
 		if resp != nil && resp.StatusCode != 200 {
 			bodyBytes, _ := ioutil.ReadAll(resp.Body)
+			if resp.StatusCode == http.StatusBadRequest && strings.Contains(string(bodyBytes), "already initialized") {
+				log.Println("already unsealed")
+				os.Exit(0)
+				return
+			}
 			log.Printf("status: %d, body: %s, retrying...", resp.StatusCode, string(bodyBytes))
 			retries += 1
 			continue
@@ -121,11 +256,32 @@ func main() {
 		log.Panic(err)
 	}
 
-	_, err = sm.UpdateSecret(&secretsmanager.UpdateSecretInput{
-		SecretId:     aws.String(c.AwsSecretName),
-		SecretString: aws.String(string(secretString)),
-	})
+	updateReqNew := &secretmanagerpb.UpdateSecretRequest{
+		Secret: &secretmanagerpb.Secret{
+			Name: fmt.Sprintf("projects/%s/secrets/%s", c.ProjectID, c.GcpSecretName),
+			Labels: map[string]string{
+				"secretmanager": "rocks",
+			},
+		},
+		UpdateMask: &field_mask.FieldMask{
+			Paths: []string{"labels"},
+		},
+	}
+
+	// Call the API.
+	_, err = cli.client.UpdateSecret(ctx, updateReqNew)
 	if err != nil {
-		log.Panic(err)
+		log.Fatalf("failed to update secret: %v", err)
+	}
+
+	// Build the request.
+	addSecretVersionReqNew := &secretmanagerpb.AddSecretVersionRequest{
+		Parent:  fmt.Sprintf("projects/%s/secrets/%s", c.ProjectID, c.GcpSecretName),
+		Payload: &secretmanagerpb.SecretPayload{Data: secretString},
+	}
+	// Call the API.
+	_, err = cli.client.AddSecretVersion(ctx, addSecretVersionReqNew)
+	if err != nil {
+		log.Fatalf("failed to add secret version: %v", err)
 	}
 }
