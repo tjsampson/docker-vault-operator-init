@@ -46,11 +46,6 @@ jobs:
             ${{ runner.os }}-build-
             ${{ runner.os }}-
 
-      - name: Check SemVer Tag 🖖
-        run: |
-          echo "${{ env.VERSION }}"
-          make check_version
-
       - name: Docker Image 🐳
         if: ${{ contains(github.ref, 'master') }}
         uses: docker/build-push-action@v2
