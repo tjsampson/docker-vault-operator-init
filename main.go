@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"net/http"
+	"strings"
+	"time"
 
 	//"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -16,6 +21,7 @@ import (
 
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	secretmanagerpb "google.golang.org/genproto/googleapis/cloud/secretmanager/v1"
+	"google.golang.org/genproto/protobuf/field_mask"
 
 	"github.com/kelseyhightower/envconfig"
 )
@@ -104,7 +110,7 @@ func contextWithSignal(parent context.Context, signals ...os.Signal) (context.Co
 }
 
 func main() {
-	var _, cancel = contextWithSignal(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	var ctx, cancel = contextWithSignal(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	c := GetConfig()
@@ -115,169 +121,169 @@ func main() {
 	}
 	defer cli.client.Close()
 
-	select {}
+	// select {}
 
-	// secret, err := cli.client.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{Name: cli.secretPath(c.GcpSecretName)})
-	// if err != nil {
-	// 	log.Println("failed to access secret version")
-	// 	if strings.Contains(strings.ToLower(err.Error()), "notfound") {
-	// 		log.Println("secret not found")
-	// 		// Create the request to create the secret.
-	// 		createSecretReq := &secretmanagerpb.CreateSecretRequest{
-	// 			Parent:   fmt.Sprintf("projects/%s", c.ProjectID),
-	// 			SecretId: c.GcpSecretName,
-	// 			Secret: &secretmanagerpb.Secret{
-	// 				Replication: &secretmanagerpb.Replication{
-	// 					Replication: &secretmanagerpb.Replication_Automatic_{
-	// 						Automatic: &secretmanagerpb.Replication_Automatic{},
-	// 					},
-	// 				},
-	// 			},
-	// 		}
+	secret, err := cli.client.AccessSecretVersion(ctx, &secretmanagerpb.AccessSecretVersionRequest{Name: cli.secretPath(c.GcpSecretName)})
+	if err != nil {
+		log.Println("failed to access secret version")
+		if strings.Contains(strings.ToLower(err.Error()), "notfound") {
+			log.Println("secret not found")
+			// Create the request to create the secret.
+			createSecretReq := &secretmanagerpb.CreateSecretRequest{
+				Parent:   fmt.Sprintf("projects/%s", c.ProjectID),
+				SecretId: c.GcpSecretName,
+				Secret: &secretmanagerpb.Secret{
+					Replication: &secretmanagerpb.Replication{
+						Replication: &secretmanagerpb.Replication_Automatic_{
+							Automatic: &secretmanagerpb.Replication_Automatic{},
+						},
+					},
+				},
+			}
 
-	// 		secret, err := cli.client.CreateSecret(ctx, createSecretReq)
-	// 		if err != nil {
-	// 			log.Fatalf("failed to create secret: %v", err)
-	// 		}
-	// 		// Declare the payload to store.
-	// 		payload := []byte("comming soon")
-	// 		log.Println("secret created")
+			secret, err := cli.client.CreateSecret(ctx, createSecretReq)
+			if err != nil {
+				log.Fatalf("failed to create secret: %v", err)
+			}
+			// Declare the payload to store.
+			payload := []byte("comming soon")
+			log.Println("secret created")
 
-	// 		// Build the request.
-	// 		addSecretVersionReq := &secretmanagerpb.AddSecretVersionRequest{
-	// 			Parent: secret.Name,
-	// 			Payload: &secretmanagerpb.SecretPayload{
-	// 				Data: payload,
-	// 			},
-	// 		}
+			// Build the request.
+			addSecretVersionReq := &secretmanagerpb.AddSecretVersionRequest{
+				Parent: secret.Name,
+				Payload: &secretmanagerpb.SecretPayload{
+					Data: payload,
+				},
+			}
 
-	// 		// Call the API.
-	// 		_, err = cli.client.AddSecretVersion(ctx, addSecretVersionReq)
-	// 		if err != nil {
-	// 			log.Fatalf("failed to add secret version: %v", err)
-	// 		}
+			// Call the API.
+			_, err = cli.client.AddSecretVersion(ctx, addSecretVersionReq)
+			if err != nil {
+				log.Fatalf("failed to add secret version: %v", err)
+			}
 
-	// 		log.Println("secret versioned")
-	// 	} else {
-	// 		log.Panic(err.Error())
-	// 	}
-	// }
+			log.Println("secret versioned")
+		} else {
+			log.Panic(err.Error())
+		}
+	}
 
-	// if secret == nil {
-	// 	log.Println("nil secret first time creation")
-	// } else {
-	// 	log.Println(secret.Name)
-	// }
+	if secret == nil {
+		log.Println("nil secret first time creation")
+	} else {
+		log.Println(secret.Name)
+	}
 
-	// updateReq := &secretmanagerpb.UpdateSecretRequest{
-	// 	Secret: &secretmanagerpb.Secret{
-	// 		//Name: c.GcpSecretName,
-	// 		Name: fmt.Sprintf("projects/%s/secrets/%s", c.ProjectID, c.GcpSecretName),
-	// 		Labels: map[string]string{
-	// 			"secretmanager": "rocks",
-	// 		},
-	// 	},
-	// 	UpdateMask: &field_mask.FieldMask{
-	// 		Paths: []string{"labels"},
-	// 	},
-	// }
+	updateReq := &secretmanagerpb.UpdateSecretRequest{
+		Secret: &secretmanagerpb.Secret{
+			//Name: c.GcpSecretName,
+			Name: fmt.Sprintf("projects/%s/secrets/%s", c.ProjectID, c.GcpSecretName),
+			Labels: map[string]string{
+				"secretmanager": "rocks",
+			},
+		},
+		UpdateMask: &field_mask.FieldMask{
+			Paths: []string{"labels"},
+		},
+	}
 
-	// // Call the API.
-	// _, err = cli.client.UpdateSecret(ctx, updateReq)
-	// if err != nil {
-	// 	log.Fatalf("failed to update secret: %v", err)
-	// }
+	// Call the API.
+	_, err = cli.client.UpdateSecret(ctx, updateReq)
+	if err != nil {
+		log.Fatalf("failed to update secret: %v", err)
+	}
 
-	// // Build the request.
-	// addSecretVersionReq := &secretmanagerpb.AddSecretVersionRequest{
-	// 	Parent: fmt.Sprintf("projects/%s/secrets/%s", c.ProjectID, c.GcpSecretName),
-	// 	Payload: &secretmanagerpb.SecretPayload{
-	// 		Data: []byte("updated"),
-	// 	},
-	// }
+	// Build the request.
+	addSecretVersionReq := &secretmanagerpb.AddSecretVersionRequest{
+		Parent: fmt.Sprintf("projects/%s/secrets/%s", c.ProjectID, c.GcpSecretName),
+		Payload: &secretmanagerpb.SecretPayload{
+			Data: []byte("updated"),
+		},
+	}
 
-	// _, err = cli.client.AddSecretVersion(ctx, addSecretVersionReq)
-	// if err != nil {
-	// 	log.Fatalf("failed to add secret version: %v", err)
-	// }
+	_, err = cli.client.AddSecretVersion(ctx, addSecretVersionReq)
+	if err != nil {
+		log.Fatalf("failed to add secret version: %v", err)
+	}
 
-	// client := &http.Client{}
-	// var jsonStr = []byte(fmt.Sprintf(`{"recovery_shares":%d, "recovery_threshold": %d}`, c.VaultRecoveryShares, c.VaultRecoveryThreshold))
-	// retries := 0
-	// resp := &http.Response{}
-	// for retries < 10 {
-	// 	req, err := http.NewRequest("PUT", fmt.Sprintf("%s/v1/sys/init", c.VaultAddr), bytes.NewBuffer(jsonStr))
-	// 	if err != nil {
-	// 		log.Panic(err)
-	// 	}
-	// 	time.Sleep(10 * time.Second)
+	client := &http.Client{}
+	var jsonStr = []byte(fmt.Sprintf(`{"recovery_shares":%d, "recovery_threshold": %d}`, c.VaultRecoveryShares, c.VaultRecoveryThreshold))
+	retries := 0
+	resp := &http.Response{}
+	for retries < 10 {
+		req, err := http.NewRequest("PUT", fmt.Sprintf("%s/v1/sys/init", c.VaultAddr), bytes.NewBuffer(jsonStr))
+		if err != nil {
+			log.Panic(err)
+		}
+		time.Sleep(10 * time.Second)
 
-	// 	resp, err = client.Do(req)
-	// 	if err != nil {
-	// 		log.Println(err)
-	// 		retries += 1
-	// 		continue
-	// 	}
+		resp, err = client.Do(req)
+		if err != nil {
+			log.Println(err)
+			retries += 1
+			continue
+		}
 
-	// 	if resp != nil && resp.StatusCode != 200 {
-	// 		bodyBytes, _ := ioutil.ReadAll(resp.Body)
-	// 		if resp.StatusCode == http.StatusBadRequest && strings.Contains(string(bodyBytes), "already initialized") {
-	// 			log.Println("already unsealed")
-	// 			os.Exit(0)
-	// 			return
-	// 		}
-	// 		log.Printf("status: %d, body: %s, retrying...", resp.StatusCode, string(bodyBytes))
-	// 		retries += 1
-	// 		continue
-	// 	}
-	// 	break
-	// }
+		if resp != nil && resp.StatusCode != 200 {
+			bodyBytes, _ := ioutil.ReadAll(resp.Body)
+			if resp.StatusCode == http.StatusBadRequest && strings.Contains(string(bodyBytes), "already initialized") {
+				log.Println("already unsealed")
+				os.Exit(0)
+				return
+			}
+			log.Printf("status: %d, body: %s, retrying...", resp.StatusCode, string(bodyBytes))
+			retries += 1
+			continue
+		}
+		break
+	}
 
-	// if resp != nil && resp.StatusCode != 200 {
-	// 	log.Panicf("invalid status: %d", resp.StatusCode)
-	// }
+	if resp != nil && resp.StatusCode != 200 {
+		log.Panicf("invalid status: %d", resp.StatusCode)
+	}
 
-	// var respMap map[string]interface{}
-	// err = json.NewDecoder(resp.Body).Decode(&respMap)
-	// if err != nil {
-	// 	log.Panic(err)
-	// }
+	var respMap map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&respMap)
+	if err != nil {
+		log.Panic(err)
+	}
 
-	// if _, ok := respMap["root_token"]; !ok {
-	// 	log.Panic("missing root token")
-	// }
+	if _, ok := respMap["root_token"]; !ok {
+		log.Panic("missing root token")
+	}
 
-	// secretString, err := json.Marshal(respMap)
-	// if err != nil {
-	// 	log.Panic(err)
-	// }
+	secretString, err := json.Marshal(respMap)
+	if err != nil {
+		log.Panic(err)
+	}
 
-	// updateReqNew := &secretmanagerpb.UpdateSecretRequest{
-	// 	Secret: &secretmanagerpb.Secret{
-	// 		Name: fmt.Sprintf("projects/%s/secrets/%s", c.ProjectID, c.GcpSecretName),
-	// 		Labels: map[string]string{
-	// 			"secretmanager": "rocks",
-	// 		},
-	// 	},
-	// 	UpdateMask: &field_mask.FieldMask{
-	// 		Paths: []string{"labels"},
-	// 	},
-	// }
+	updateReqNew := &secretmanagerpb.UpdateSecretRequest{
+		Secret: &secretmanagerpb.Secret{
+			Name: fmt.Sprintf("projects/%s/secrets/%s", c.ProjectID, c.GcpSecretName),
+			Labels: map[string]string{
+				"secretmanager": "rocks",
+			},
+		},
+		UpdateMask: &field_mask.FieldMask{
+			Paths: []string{"labels"},
+		},
+	}
 
-	// // Call the API.
-	// _, err = cli.client.UpdateSecret(ctx, updateReqNew)
-	// if err != nil {
-	// 	log.Fatalf("failed to update secret: %v", err)
-	// }
+	// Call the API.
+	_, err = cli.client.UpdateSecret(ctx, updateReqNew)
+	if err != nil {
+		log.Fatalf("failed to update secret: %v", err)
+	}
 
-	// // Build the request.
-	// addSecretVersionReqNew := &secretmanagerpb.AddSecretVersionRequest{
-	// 	Parent:  fmt.Sprintf("projects/%s/secrets/%s", c.ProjectID, c.GcpSecretName),
-	// 	Payload: &secretmanagerpb.SecretPayload{Data: secretString},
-	// }
-	// // Call the API.
-	// _, err = cli.client.AddSecretVersion(ctx, addSecretVersionReqNew)
-	// if err != nil {
-	// 	log.Fatalf("failed to add secret version: %v", err)
-	// }
+	// Build the request.
+	addSecretVersionReqNew := &secretmanagerpb.AddSecretVersionRequest{
+		Parent:  fmt.Sprintf("projects/%s/secrets/%s", c.ProjectID, c.GcpSecretName),
+		Payload: &secretmanagerpb.SecretPayload{Data: secretString},
+	}
+	// Call the API.
+	_, err = cli.client.AddSecretVersion(ctx, addSecretVersionReqNew)
+	if err != nil {
+		log.Fatalf("failed to add secret version: %v", err)
+	}
 }
