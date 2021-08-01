@@ -55,7 +55,7 @@ func NewClient(cfg *Config) (*Client, error) {
 	ctx := context.Background()
 	client, err := secretmanager.NewClient(ctx)
 	if err != nil {
-		log.Panic("failed to setup client: %v", err.Error())
+		log.Fatalf("failed to setup client: %v", err.Error())
 		return nil, err
 	}
 
