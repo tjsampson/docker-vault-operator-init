@@ -21,12 +21,12 @@ import (
 )
 
 type Config struct {
-	GcpSecretName               string `envconfig:"GCP_SECRET_NAME" required:"true"`
-	ProjectID                   string `envconfig:"GCP_PROJECT_ID" required:"true"`
-	GoogleApplicationCredential string `envconfig:"GOOGLE_APPLICATION_CREDENTIAL" required:"true"`
-	VaultAddr                   string `envconfig:"VAULT_ADDR" required:"true"`
-	VaultRecoveryShares         int    `envconfig:"VAULT_RECOVERY_SHARES" default:"5"`
-	VaultRecoveryThreshold      int    `envconfig:"VAULT_RECOVERY_THRESHOLD" default:"3"`
+	GcpSecretName string `envconfig:"GCP_SECRET_NAME" required:"true"`
+	ProjectID     string `envconfig:"GCP_PROJECT_ID" required:"true"`
+	// GoogleApplicationCredential string `envconfig:"GOOGLE_APPLICATION_CREDENTIAL" required:"true"`
+	VaultAddr              string `envconfig:"VAULT_ADDR" required:"true"`
+	VaultRecoveryShares    int    `envconfig:"VAULT_RECOVERY_SHARES" default:"5"`
+	VaultRecoveryThreshold int    `envconfig:"VAULT_RECOVERY_THRESHOLD" default:"3"`
 }
 
 func GetConfig() Config {
